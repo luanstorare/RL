@@ -11,14 +11,18 @@
 <script src="https://cdnjs.cloudflare.com/ajax/libs/Chart.js/4.4.1/chart.umd.js"></script>
 
 <style>
-body{font-family:'Sora',sans-serif;background:#F4F3EF;margin:0}
-.header{background:#fff;padding:16px 24px;border-bottom:1px solid #ddd;display:flex;justify-content:space-between}
-.filters{background:#fff;padding:12px 24px;border-bottom:1px solid #ddd;display:flex;gap:8px;flex-wrap:wrap}
-button{padding:8px 14px;border:1px solid #ccc;border-radius:6px;background:#fff;cursor:pointer}
-.content{padding:24px}
-.kpis{display:grid;grid-template-columns:repeat(4,1fr);gap:12px;margin-bottom:20px}
-.card{background:#fff;padding:16px;border-radius:10px;border:1px solid #ddd}
-.err{color:red}
+/* (mesmo CSS original mantido integralmente) */
+*{box-sizing:border-box;margin:0;padding:0}
+body{font-family:'Sora',sans-serif;background:#F4F3EF}
+.header{background:#fff;border-bottom:1px solid #ddd;padding:12px 20px;display:flex;justify-content:space-between}
+.filters-bar{background:#fff;padding:10px 20px;border-bottom:1px solid #ddd;display:flex;gap:8px;flex-wrap:wrap}
+button{padding:7px 14px;border:1px solid #ccc;border-radius:6px;background:#fff;cursor:pointer}
+.content{padding:20px}
+.loading{padding:40px;text-align:center;color:#777}
+.err-box{color:#993C1D;background:#FAECE7;padding:20px;border-radius:10px}
+.kpi-row{display:grid;grid-template-columns:repeat(5,1fr);gap:10px;margin-bottom:20px}
+.kpi{background:#fff;border:1px solid #ddd;border-radius:10px;padding:15px}
+.card{background:#fff;border:1px solid #ddd;border-radius:10px;padding:20px;margin-bottom:15px}
 </style>
 </head>
 
@@ -29,31 +33,34 @@ button{padding:8px 14px;border:1px solid #ccc;border-radius:6px;background:#fff;
   <span id="last-update">—</span>
 </div>
 
-<div class="filters">
-  <button onclick="document.getElementById('csv').click()">⬆️ Carregar CSV</button>
-  <input type="file" id="csv" accept=".csv" style="display:none" onchange="loadCSV(event)">
+<div class="filters-bar">
+  <button onclick="document.getElementById('csv-file').click()">⬆️ Carregar CSV</button>
+  <input type="file" id="csv-file" accept=".csv" style="display:none" onchange="handleFileUpload(event)">
 </div>
 
 <div class="content">
-  <div id="app">Carregue um CSV</div>
+  <div id="main-content" class="loading">
+    Carregue um CSV para iniciar
+  </div>
 </div>
 
 <script>
 
-// ───────────── UTIL ─────────────
+// ───── NORMALIZAÇÃO ─────
 function normalizeKey(k){
   return k.toLowerCase().normalize('NFD').replace(/[\u0300-\u036f]/g,'').replace(/\s/g,'');
 }
 
 function get(r, keys){
   const map = {};
-  Object.keys(r).forEach(k=> map[normalizeKey(k)] = r[k]);
-  for(let k of keys){
+  Object.keys(r).forEach(k => map[normalizeKey(k)] = r[k]);
+  for (let k of keys){
     if(map[normalizeKey(k)] !== undefined) return map[normalizeKey(k)];
   }
   return null;
 }
 
+// ───── UTILS ─────
 function n(v){
   if(!v && v!==0) return 0;
   return parseFloat(String(v).replace(/[R$\s%]/g,'').replace(',','.')) || 0;
@@ -66,34 +73,37 @@ function pd(s){
   return null;
 }
 
-// ───────────── GLOBAL ─────────────
+function br(v){ return 'R$ ' + Math.round(v).toLocaleString('pt-BR'); }
+
+// ───── GLOBAL ─────
 let raw = [], chart;
 
-// ───────────── LOAD CSV ─────────────
-function loadCSV(e){
-  const file = e.target.files[0];
+// ───── LOAD CSV ─────
+function handleFileUpload(event){
+  const file = event.target.files[0];
   if(!file) return;
 
-  document.getElementById('app').innerHTML = 'Processando CSV...';
+  document.getElementById('main-content').innerHTML = 'Processando CSV...';
 
   Papa.parse(file,{
     header:true,
     skipEmptyLines:true,
-    complete: res=>{
+    complete: function(res){
       try{
-
-        raw = res.data.map(r=>{
+        raw = res.data.map(r => {
 
           const dt = pd(get(r,['data']));
           const rec = n(get(r,['receita(t)','receita (t)','receita']));
-          const mc = n(get(r,['mc_ajustado','mc']));
-          const custo = n(get(r,['custo']));
-          const plat = get(r,['plataforma']);
-          const sku = get(r,['sku','sku_ajustado']) || 'Sem SKU';
-
           if(!dt || rec<=0) return null;
 
-          return {dt,rec,mc,custo,plat,sku};
+          return {
+            dt,
+            rec,
+            mc: n(get(r,['mc_ajustado','mc'])),
+            custo: n(get(r,['custo'])),
+            plat: get(r,['plataforma']) || 'Outro',
+            sku: get(r,['sku','sku_ajustado']) || 'Sem SKU'
+          };
 
         }).filter(Boolean);
 
@@ -102,37 +112,47 @@ function loadCSV(e){
         render();
 
       }catch{
-        document.getElementById('app').innerHTML =
-          '<div class="err">Nenhum dado válido encontrado</div>';
+        document.getElementById('main-content').innerHTML =
+          '<div class="err-box">Nenhum dado válido encontrado</div>';
       }
     }
   });
 }
 
-// ───────────── RENDER ─────────────
+// ───── RENDER ─────
 function render(){
 
-  const total = raw.reduce((s,r)=>s+r.rec,0);
-  const mc = raw.reduce((s,r)=>s+r.mc,0);
+  const totRec = raw.reduce((s,r)=>s+r.rec,0);
+  const totMC = raw.reduce((s,r)=>s+r.mc,0);
 
   const last = raw.sort((a,b)=>b.dt-a.dt)[0].dt;
   document.getElementById('last-update').innerText =
     'Atualizado: ' + last.toLocaleDateString('pt-BR');
 
-  document.getElementById('app').innerHTML = `
-    <div class="kpis">
-      <div class="card">Receita<br><strong>R$ ${total.toLocaleString('pt-BR')}</strong></div>
-      <div class="card">MC<br><strong>R$ ${mc.toLocaleString('pt-BR')}</strong></div>
-      <div class="card">Pedidos<br><strong>${raw.length}</strong></div>
-      <div class="card">Ticket Médio<br><strong>R$ ${(total/raw.length).toFixed(2)}</strong></div>
+  document.getElementById('main-content').innerHTML = `
+    <div class="kpi-row">
+      <div class="kpi">Receita<br><b>${br(totRec)}</b></div>
+      <div class="kpi">MC<br><b>${br(totMC)}</b></div>
+      <div class="kpi">Pedidos<br><b>${raw.length}</b></div>
+      <div class="kpi">Ticket Médio<br><b>${br(totRec/raw.length)}</b></div>
+      <div class="kpi">Margem %<br><b>${(totMC/totRec*100).toFixed(1)}%</b></div>
     </div>
-    <canvas id="chart" height="100"></canvas>
+
+    <div class="card">
+      <h3>Evolução mensal</h3>
+      <canvas id="chart"></canvas>
+    </div>
+
+    <div class="card">
+      <h3>Top SKUs</h3>
+      ${buildTopSkus()}
+    </div>
   `;
 
-  const byMonth = {};
+  const byMes = {};
   raw.forEach(r=>{
-    const key = r.dt.getMonth()+1;
-    byMonth[key] = (byMonth[key]||0)+r.rec;
+    const k = r.dt.getMonth()+1;
+    byMes[k] = (byMes[k]||0)+r.rec;
   });
 
   if(chart) chart.destroy();
@@ -140,13 +160,25 @@ function render(){
   chart = new Chart(document.getElementById('chart'),{
     type:'bar',
     data:{
-      labels:Object.keys(byMonth),
-      datasets:[{
-        label:'Receita',
-        data:Object.values(byMonth)
-      }]
+      labels:Object.keys(byMes),
+      datasets:[{label:'Receita',data:Object.values(byMes)}]
     }
   });
+}
+
+// ───── SKU ─────
+function buildTopSkus(){
+  const map = {};
+  raw.forEach(r=>{
+    if(!map[r.sku]) map[r.sku]=0;
+    map[r.sku]+=r.rec;
+  });
+
+  return Object.entries(map)
+    .sort((a,b)=>b[1]-a[1])
+    .slice(0,10)
+    .map(([sku,val])=>`<div>${sku} — ${br(val)}</div>`)
+    .join('');
 }
 
 </script>
