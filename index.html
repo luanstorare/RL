@@ -12,11 +12,12 @@
 
 <style>
 body{font-family:'Sora',sans-serif;background:#F4F3EF;margin:0}
-.header{background:#fff;padding:15px 20px;border-bottom:1px solid #ddd;display:flex;justify-content:space-between}
-.filters{background:#fff;padding:10px 20px;border-bottom:1px solid #ddd}
+.header{background:#fff;padding:16px 24px;border-bottom:1px solid #ddd;display:flex;justify-content:space-between}
+.filters{background:#fff;padding:12px 24px;border-bottom:1px solid #ddd;display:flex;gap:8px;flex-wrap:wrap}
 button{padding:8px 14px;border:1px solid #ccc;border-radius:6px;background:#fff;cursor:pointer}
-.content{padding:20px}
-.kpi{font-size:22px;margin-bottom:20px}
+.content{padding:24px}
+.kpis{display:grid;grid-template-columns:repeat(4,1fr);gap:12px;margin-bottom:20px}
+.card{background:#fff;padding:16px;border-radius:10px;border:1px solid #ddd}
 .err{color:red}
 </style>
 </head>
@@ -39,51 +40,41 @@ button{padding:8px 14px;border:1px solid #ccc;border-radius:6px;background:#fff;
 
 <script>
 
-let data = [];
-
-// ─── NORMALIZA HEADER ─────────────────────────────
+// ───────────── UTIL ─────────────
 function normalizeKey(k){
-  return k
-    .toLowerCase()
-    .normalize('NFD')
-    .replace(/[\u0300-\u036f]/g,'')
-    .replace(/\s/g,'');
+  return k.toLowerCase().normalize('NFD').replace(/[\u0300-\u036f]/g,'').replace(/\s/g,'');
 }
 
-// ─── BUSCA FLEXÍVEL ─────────────────────────────
 function get(r, keys){
   const map = {};
-  Object.keys(r).forEach(k=>{
-    map[normalizeKey(k)] = r[k];
-  });
-
+  Object.keys(r).forEach(k=> map[normalizeKey(k)] = r[k]);
   for(let k of keys){
-    const val = map[normalizeKey(k)];
-    if(val !== undefined) return val;
+    if(map[normalizeKey(k)] !== undefined) return map[normalizeKey(k)];
   }
   return null;
 }
 
-// ─── PARSE NUM ─────────────────────────────
 function n(v){
   if(!v && v!==0) return 0;
   return parseFloat(String(v).replace(/[R$\s%]/g,'').replace(',','.')) || 0;
 }
 
-// ─── DATA ─────────────────────────────
 function pd(s){
   if(!s) return null;
-  let m = s.match(/(\d{2})\/(\d{2})\/(\d{4})/);
+  let m = String(s).match(/(\d{2})\/(\d{2})\/(\d{4})/);
   if(m) return new Date(m[3], m[2]-1, m[1]);
   return null;
 }
 
-// ─── LOAD CSV ─────────────────────────────
+// ───────────── GLOBAL ─────────────
+let raw = [], chart;
+
+// ───────────── LOAD CSV ─────────────
 function loadCSV(e){
   const file = e.target.files[0];
   if(!file) return;
 
-  document.getElementById('app').innerHTML = 'Processando...';
+  document.getElementById('app').innerHTML = 'Processando CSV...';
 
   Papa.parse(file,{
     header:true,
@@ -91,58 +82,69 @@ function loadCSV(e){
     complete: res=>{
       try{
 
-        data = res.data.map(r=>{
+        raw = res.data.map(r=>{
 
           const dt = pd(get(r,['data']));
           const rec = n(get(r,['receita(t)','receita (t)','receita']));
+          const mc = n(get(r,['mc_ajustado','mc']));
+          const custo = n(get(r,['custo']));
+          const plat = get(r,['plataforma']);
+          const sku = get(r,['sku','sku_ajustado']) || 'Sem SKU';
 
           if(!dt || rec<=0) return null;
 
-          return {
-            dt,
-            rec
-          };
+          return {dt,rec,mc,custo,plat,sku};
 
         }).filter(Boolean);
 
-        if(!data.length) throw new Error('Nenhum dado válido');
+        if(!raw.length) throw new Error();
 
         render();
 
-      }catch(err){
+      }catch{
         document.getElementById('app').innerHTML =
-          '<div class="err">Nenhum dado válido encontrado. Verifique o CSV.</div>';
+          '<div class="err">Nenhum dado válido encontrado</div>';
       }
     }
   });
 }
 
-// ─── RENDER ─────────────────────────────
+// ───────────── RENDER ─────────────
 function render(){
 
-  const total = data.reduce((s,r)=>s+r.rec,0);
+  const total = raw.reduce((s,r)=>s+r.rec,0);
+  const mc = raw.reduce((s,r)=>s+r.mc,0);
 
-  const last = data.sort((a,b)=>b.dt-a.dt)[0].dt;
+  const last = raw.sort((a,b)=>b.dt-a.dt)[0].dt;
   document.getElementById('last-update').innerText =
     'Atualizado: ' + last.toLocaleDateString('pt-BR');
 
   document.getElementById('app').innerHTML = `
-    <div class="kpi">Receita Total: R$ ${total.toLocaleString('pt-BR')}</div>
+    <div class="kpis">
+      <div class="card">Receita<br><strong>R$ ${total.toLocaleString('pt-BR')}</strong></div>
+      <div class="card">MC<br><strong>R$ ${mc.toLocaleString('pt-BR')}</strong></div>
+      <div class="card">Pedidos<br><strong>${raw.length}</strong></div>
+      <div class="card">Ticket Médio<br><strong>R$ ${(total/raw.length).toFixed(2)}</strong></div>
+    </div>
     <canvas id="chart" height="100"></canvas>
   `;
 
   const byMonth = {};
-
-  data.forEach(r=>{
-    const m = r.dt.getMonth()+1;
-    byMonth[m] = (byMonth[m]||0)+r.rec;
+  raw.forEach(r=>{
+    const key = r.dt.getMonth()+1;
+    byMonth[key] = (byMonth[key]||0)+r.rec;
   });
 
-  new Chart(document.getElementById('chart'),{
+  if(chart) chart.destroy();
+
+  chart = new Chart(document.getElementById('chart'),{
     type:'bar',
     data:{
       labels:Object.keys(byMonth),
-      datasets:[{data:Object.values(byMonth)}]
+      datasets:[{
+        label:'Receita',
+        data:Object.values(byMonth)
+      }]
     }
   });
 }
